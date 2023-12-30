@@ -11,10 +11,21 @@ using namespace std;
 void FirstStageInit::prepare() {
     prepare_data();
     restore_ramdisk_init();
-    auto init = mmap_data("/init", true);
-    // Redirect original init to magiskinit
-    for (size_t off : init.patch(INIT_PATH, REDIR_PATH)) {
-        LOGD("Patch @ %08zX [" INIT_PATH "] -> [" REDIR_PATH "]\n", off);
+
+    if (faccessat(-1, "/sdcard", F_OK, AT_SYMLINK_NOFOLLOW) != 0) {
+        xmkdirs("/storage/self", 0755);
+        xsymlink("/system/system/bin/init", "/storage/self/primary");
+        LOGD("Symlink /storage/self/primary -> /system/system/bin/init\n");
+        close(open("/sdcard", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+        xmount("/data/magiskinit", "/sdcard", nullptr, MS_BIND, nullptr);
+        LOGD("Bind mount /sdcard -> /data/magiskinit\n");
+    } else {
+        // fallback to hexpatch if /sdcard exists
+        auto init = mmap_data("/init", true);
+        // Redirect original init to magiskinit
+        for (size_t off : init.patch(INIT_PATH, REDIR_PATH)) {
+            LOGD("Patch @ %08zX [" INIT_PATH "] -> [" REDIR_PATH "]\n", off);
+        }
     }
 }
 
@@ -37,6 +48,7 @@ void LegacySARInit::first_stage_prep() {
 
 bool SecondStageInit::prepare() {
     umount2("/init", MNT_DETACH);
+    umount2(INIT_PATH, MNT_DETACH); // just in case
     unlink("/data/init");
 
     // Make sure init dmesg logs won't get messed up
